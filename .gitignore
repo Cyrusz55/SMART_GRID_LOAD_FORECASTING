@@ -1,0 +1,16 @@
+# Large data files
+/data_raw/
+/models/
+*.joblib
+*.csv
+
+# Python / virtual env
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# IDEs / OS
+.idea/
+.vscode/
+.DS_Store
