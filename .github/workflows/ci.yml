@@ -41,7 +41,7 @@ jobs:
   # 3.1a - lint
   # -------------------------------------------------------------------------
   lint:
-    name: Lint (ruff + black)
+    name: Lint (ruff)
     runs-on: ubuntu-latest
     # Tolerated for now: the repo has never been linted, so a first run will
     # be noisy. Remove continue-on-error once the tree is clean.

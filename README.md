@@ -9,6 +9,8 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.141-green.svg)](#)
 [![Reflex](https://img.shields.io/badge/Reflex-0.9.10-purple.svg)](#)
 [![Postgres/Supabase](https://img.shields.io/badge/PostgreSQL-Supabase-336791.svg)](#)
+[![CI](https://github.com/Cyrusz55/SMART_GRID_LOAD_FORECASTING/actions/workflows/ci.yml/badge.svg)](https://github.com/Cyrusz55/SMART_GRID_LOAD_FORECASTING/actions/workflows/ci.yml)
+[![codecov](https://img.shields.io/badge/coverage-72%25%20floor%2070%25-brightgreen.svg)](#)
 
 </div>
 
