@@ -9,10 +9,10 @@
 **Provenance:** every item below came from reading the actual source files, not from generic advice.
 **Verified baseline:** 3 commits · 5 notebooks · 0 tests · 0 CI · 0 Docker · model = 1.13 GB on disk.
 
-**Last updated:** 2026-09-15 (after Phase 1 + Phase 2 execution)
-**Current state:** Phase 1 complete (12/12 actionable, 1.2 withdrawn) · Phase 2 complete (2.1–2.9, **152 tests, 76% coverage**) · Phases 3–8 untouched.
+**Last updated:** 2026-09-15 (after Phase 3 execution)
+**Current state:** Phase 1 complete (12/12 actionable, 1.2 withdrawn) · Phase 2 complete (2.1–2.9, **152 tests, 72% coverage**) · **Phase 3 complete (3.1–3.7 all done, CI green and enforced)** · Phases 4–8 untouched.
 
-> ⚠️ **Items 1.1–1.13 and 2.1–2.9 are DONE and ticked below.** The remaining items (2.10, 3.x onwards) are still open. Two corrections were made to this file during execution — see **Corrections** at the end.
+> ⚠️ **Items 1.1–1.13, 2.1–2.9 and 3.1–3.7 are DONE and ticked below.** The remaining items (2.10, 1.15, 4.x onwards) are still open. **Three** corrections were made to this file during execution — see **Corrections** at the end. A fourth round of findings came from *verifying* Phase 3 rather than writing it; see **Phase 3b**.
 
 ---
 
@@ -193,34 +193,120 @@
 
 ## 🟡 Phase 3 — CI/CD (the scaffolding you specifically wanted)
 
-- [x] **3.1 — Create `.github/workflows/ci.yml`** triggered on `push` and `pull_request`. **DONE.** All four jobs live in one file, YAML-validated.
-  - [x] **3.1a** Job **lint**: `ruff check .` + `black --check .` — `continue-on-error: true` (the tree has never been linted; a first run will be noisy).
-  - [x] **3.1b** Job **test**: `pytest -q` — **no `--cov` flags restated**, because `pytest.ini` already owns the coverage config and the `--cov-fail-under=70` floor (see 2.8). Restating them here is how CI and local runs drift apart. This is the **only** job that can go red.
-  - [x] **3.1c** Job **types**: `mypy apps/ machine_learning/ --ignore-missing-imports`, `continue-on-error: true`.
+- [x] **3.1 — Create `.github/workflows/ci.yml`** triggered on `push` and `pull_request`. **DONE.** All four jobs live in one file, YAML-validated. **All four jobs verified GREEN on GitHub** (run `34962861624`, commit `42237db`).
+  - [x] **3.1a** Job **lint**: `ruff check .` — **now actually passes** (`All checks passed!`). `continue-on-error: true` was kept as the honest stopgap from 3.5 but is no longer doing any work; see 3.8 for what the first run actually revealed. `black --check .` was **removed** — see 3.2b.
+  - [x] **3.1b** Job **test**: `pytest -q` — **no `--cov` flags restated**, because `pytest.ini` already owns the coverage config and the `--cov-fail-under=70` floor (see 2.8). Restating them here is how CI and local runs drift apart. This is the **only** job that can go red. **Passes** (see 3.2a).
+  - [x] **3.1c** Job **types**: `mypy apps/ machine_learning/ --ignore-missing-imports`. Exit code 2 on first run was **not a type error** — see 3.2c. Now reports `Success: no issues found in 7 source files`.
   - [x] **3.1d** Job **import smoke**: `python -c "import apps.main"` — imports the app object but does **not** run the lifespan hook, so it never touches the model. **Do not replace this with `with TestClient(app)`** — that runs lifespan and hangs for minutes on the 1.05 GiB load (the trap documented in `tests/conftest.py`).
   - [x] **3.1e** pip caching via `actions/setup-python`'s `cache: pip` + `cache-dependency-path: requirements-dev.txt` (built in — no separate `actions/cache` step needed).
   - **Deviation:** the test job installs `requirements-dev.txt` **plus an explicit runtime subset**, NOT `requirements.txt`. That file carries ~160 entries including `tensorflow`, `prophet` and `pmdarima`, none of which the suite needs; installing them would dominate the run time for zero benefit.
 
-- [ ] **3.2 — Add the CI badge to `README.md`.** **BLOCKED on the first push** — a badge pointing at a workflow that has never run renders as "no status" / broken. Sequence it *after* the first successful CI run.
+- [x] **3.2 — Add the CI badge to `README.md`.** **DONE** (commit `7548bfc`). The blocker was real: a badge pointing at a workflow that had never run renders as "no status", so it was sequenced after the first green run as intended. Now renders **`passing`** — verified by fetching the SVG (HTTP 200, `image/svg+xml`, 2263 bytes, contains `passing`), not by assuming.
   `![CI](https://github.com/Cyrusz55/SMART_GRID_LOAD_FORECASTING/actions/workflows/ci.yml/badge.svg)`
-  Your README currently has **5 shields whose links are literally `#`** — see 8.3. (Counting them: Python, scikit-learn, FastAPI, Reflex, Postgres.)
+  Also added a coverage-floor badge (`72% floor 70%`) so the README reports something that can actually go red. Your README still has **5 shields whose links are literally `#`** — see 8.3. (Counting them: Python, scikit-learn, FastAPI, Reflex, Postgres.)
 
-- [ ] **3.3 — Branch-protect the default branch**: require the CI job to pass before merge. Even solo, this stops broken pushes.
-  **CORRECTION — the checklist originally said `main`. It is `master`.** Verified against the remote: `git ls-remote --symref origin HEAD` → `ref: refs/heads/master`. Protecting `main` would have silently protected a branch that does not exist and looked like it worked. `gh` 2.45.0 is installed, so this can be scripted rather than clicked.
+- [x] **3.3 — Branch-protect the default branch**: require the CI job to pass before merge. **DONE** (commit `7548bfc`). Applied via `gh api` and **read back to confirm**, rather than assuming the PUT took:
+  | Setting | Value |
+  |---|---|
+  | Required checks | `Test (pytest + coverage)`, `Import smoke`, `Lint (ruff)`, `Types (mypy)` |
+  | `strict` | `true` — branch must be up to date before merge |
+  | `allow_force_pushes` | `false` |
+  | `allow_deletions` | `false` |
+  | `enforce_admins` | `false` — deliberate: the owner can still push directly to `master` |
+  **CORRECTION — the checklist originally said `main`. It is `master`.** Verified against the remote: `git ls-remote --symref origin HEAD` → `ref: refs/heads/master`. Protecting `main` would have silently protected a branch that does not exist and looked like it worked. `gh` 2.45.0 is installed, so this was scripted rather than clicked.
+  ⚠️ **Trap, hit live during this task:** GitHub matches required status checks by **job-name string**. Renaming the lint job (`Lint (ruff + black)` → `Lint (ruff)`) left the protection waiting on a context that no longer reports — which would have **blocked every future merge to `master`, forever**. The rename and the protection update must be one atomic operation. Caught only because the protection was read back after the rename instead of trusting the earlier PUT.
 
-- [x] **3.4 — Add a nightly `model-validation.yml`** (`on: schedule`). **DONE** — `03:17 UTC` daily (off the hour on purpose; GitHub's scheduler is congested at `:00`) plus `workflow_dispatch`. Asserts feature count `== 26` **and** `model.n_features_in_ == 26`, the clean CSV still exposes `Datetime`/`region`/`MW`, the `(region, Datetime)` composite key is unique in a 5000-row sample, and `predict()` on a fixed row is finite and inside `0 < pred < 1e6` MW.
+- [x] **3.4 — Add a nightly `model-validation.yml`** (`on: schedule`). **DONE, then CORRECTED** — see **3.4b** for the four defects found on verification. `03:17 UTC` daily (off the hour on purpose; GitHub's scheduler is congested at `:00`) plus `workflow_dispatch`. Asserts feature count `== 26` **and** `model.n_features_in_ == 26`, feature **ORDER** against a committed reference, the clean CSV still exposes `Datetime`/`region`/`MW`, the `(region, Datetime)` composite key is unique **across the whole file**, and `predict()` on a realistic row lands in a sane MW band.
   **Honest limitation:** the artefacts it validates are **gitignored**, so a fresh checkout has none of them. A nightly red X for "no model in a fresh checkout" is noise, not signal — so the job **skips with a `::warning::`** and says so in the run summary. An `HF_MODEL_REPO` hook is in place so that finishing **6.3** activates full validation by **setting a secret, not editing code**.
   Note the band check asserts *sanity*, not accuracy — accuracy needs the real data and belongs in a separate job.
 
 - [x] **3.5 — Add `continue-on-error` only where honest.** **DONE.** `true` on `lint` and `types` only. `test` and `import-smoke` are never tolerated — a failing test suite cannot go green.
+  **Now moot for both:** 3.8 fixed the lint failures and 3.2c fixed the types job, so both pass on their own merits. The toleration flags remain as belt-and-braces but are no longer load-bearing. **This is the difference between a gate and a decoration** — a permanently-failing tolerated job trains everyone to ignore a red X, which is how the *next* real failure gets missed.
 
-- [x] **3.6 — Never put the 1.05 GiB model in CI.** **ENFORCED** by `.gitignore` (`/models/`, `data_raw/`, `clean_data/`, `*.joblib`, `*.csv`), so the artefact cannot be committed in the first place. The test suite stubs the model (2.3) and needs no fixture at all. Hosting a downloadable model for the *nightly* job is 6.3's problem, not CI's.
+- [x] **3.6 — Never put the 1.05 GiB model in CI.** **ENFORCED** by `.gitignore`, so the artefact cannot be committed in the first place. The test suite stubs the model (2.3) and needs no fixture at all. Hosting a downloadable model for the *nightly* job is 6.3's problem, not CI's.
 
 - [x] **3.7 — Add `.github/pull_request_template.md`**: what changed / how it was tested / any risk. **DONE**, plus a checklist covering large artefacts, `IMPROVEMENTS.md` updates and hardcoded secrets.
 
+- [x] **3.8 — Make the lint job actually pass** (not in the original list; found by running it). **DONE** (commit `ca44c1c`). 38 findings → **zero**.
+  - The 26 `E701`s in `apps/routes.py` were a **symptom of a real bug**, not style noise. `_build_future_row` dispatched on the model's own feature list through a 26-branch `if/elif` chain **with no `else`**. A feature the model expects but the chain does not cover would simply never be set — surfacing ~30 lines later as a `KeyError` from `pd.DataFrame([row])[feat_cols]`, nowhere near the cause. Rewritten as a **dict dispatch table** that raises immediately, naming the missing feature. The 26 names were read out of `models/feature_cols_clean.joblib`, so the table is verified to cover the model exactly.
+  - The last 8 findings were `E402` in `scripts/load.py` and `scripts/test_connection.py`. These are **NOT mistakes**: both do `sys.path.insert(0, PROJECT_ROOT)` before importing project modules that live above the script directory. Moving the imports to the top — literally what the rule asks — makes them fail at import time with `ModuleNotFoundError`. Exempted **per-file** in `ruff.toml`, scoped so real `E402`s elsewhere still fail.
+  - Notebooks excluded in `ruff.toml`: their 116 findings are almost entirely unused exploratory imports (`xgboost`, `lightgbm`, `prophet`, `tensorflow`) that exist to **document which models were tried**. Linting them would demand deleting the exploration record.
+
+- [x] **3.9 — Remove `black` from the lint job** (not in the original list). **DONE** (commit `ca44c1c`).
+  `black --check` wanted to reformat **20 of 21** files, including exploding the deliberately column-aligned `KEEP_COLS` in `scripts/clean.py` from **7 lines to 29**. That is thousands of lines of style-only churn which would bury real diffs.
+  Before deciding, I checked whether it was a config problem: a **wider line length does not help** (still 20 files at 110 chars), and **`ruff format --diff` is byte-identical to black's** output here, so swapping the tool changes nothing. The formatter genuinely disagrees with this codebase.
+  **Decision:** `ruff check` (which now genuinely passes) is the enforced step; formatting status is reported as a `::notice::` and never blocks. Adopting formatting is **one dedicated `ruff format .` commit** if it is ever wanted. Rationale is recorded in the workflow itself so nobody re-adds black without reading it.
+
 - **Also fixed while doing 3.1:** `.coverage` was **not** in `.gitignore`, so a coverage file was sitting untracked in the tree ready to be committed by accident. Added `.coverage`, `.coverage.*`, `htmlcov/`, `coverage.xml`, `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`.
 
-> **⚠️ Phase 3 is written, not proven.** Both workflows parse as valid YAML and the job logic is sound, but **no GitHub Actions run has executed** — that needs a push, and nothing has been committed or pushed. "CI passes" is unverified until GitHub says so.
+- **Also fixed (commit `845a0a6`):** `models/feature_cols_clean.joblib` (401 bytes) was gitignored by the `/models/` **directory** rule, so CI checkouts had no feature list and **66 tests SKIPPED** — which collapsed coverage below the 70% floor and failed the pipeline (`86 passed, 66 skipped`). A negation cannot re-include a path inside an excluded directory, so the fix required removing the directory rule and listing exclusions explicitly. Simulated the exact CI environment to confirm: **151 passed, 1 skipped, 76%** — floor met. The single skip is `test_raw_path_and_order.py:129` ("neither merged CSV is present"), a **correct** skip.
+
+> **✅ Phase 3 is now PROVEN, not just written.** All four CI jobs are green on a real GitHub Actions run (`34962861624`), the test job enforces the coverage floor in a real checkout, the badge renders `passing`, and branch protection is live and read back from the API. The earlier warning on this section ("no GitHub Actions run has executed") is **resolved** — six commits now exist on `master`, all pushed.
+
+---
+
+## 🟡 Phase 3b — Findings from *verifying* Phase 3 (added 2026-09-15)
+
+> Phase 3's files were written and looked correct. **Reading them while verifying found four defects — three of them in the nightly validation, which was shipping checks that could not fail.** This is the same lesson as Phase 1's withdrawn 1.2: "it parses" and "it is correct" are different claims.
+
+### 3.2a — Coverage floor is genuinely enforced, and the number moved
+
+`pytest` in CI: **152 passed, coverage 72.17%, floor 70% reached.**
+
+The floor originally passed at **76%**; it now reads **72%** because `machine_learning/__init__.py` (new, 0% covered) and the rewritten dispatch table changed the denominator. Both are above the floor, so this is not a regression — but the README badge says `72% floor 70%` and should be re-checked whenever the file set changes, because adding uncovered modules dilutes the total.
+
+### 3.2b — `black` and `ruff format` are the same tool here (see 3.9)
+
+Recorded as 3.9 above. The load-bearing detail: **I verified the swap would not help before rejecting it**, rather than assuming ruff-format would be gentler on the aligned lists.
+
+### 3.2c — The mypy failure was never a type error
+
+`mypy` exited **2** — its "errors prevented further checking" code — with:
+
+```
+error: Source file found twice under different module names:
+"machine_learning" and "machine_learning.machine_learning"
+Found 1 error in 1 file (errors prevented further checking)
+```
+
+`machine_learning/` had **no `__init__.py`**, so mypy could not decide whether `machine_learning.py` was a top-level module or a submodule, and **aborted before checking a single type**. Meanwhile `apps/routes.py` already imported it as a package (`from machine_learning.machine_learning import ...`), which works at runtime only via **implicit namespace packages**.
+
+Adding `machine_learning/__init__.py` made the declaration match the usage: `Success: no issues found in 7 source files`.
+
+**Lesson:** a red `types` job does not mean there are type errors. **Exit code 2 is a tooling failure, not a finding** — read the message before believing the badge.
+
+### 3.4b — The nightly validation shipped three checks that could not fail
+
+Triggering the workflow proved it runs, the schedule is registered, and the skip path behaves. It proved **nothing** about the validation logic, because every substantive step is gated behind artefacts that are gitignored. Reading that logic found:
+
+| # | Defect | Why it could never fail |
+|---|---|---|
+| 1 | `assert list(cols) == list(cols)` | Compares a list **to itself** — always true. The step's own comment calls stale feature order "the failure this job exists to catch", so **the one check the job exists for did nothing.** |
+| 2 | `pd.read_csv(csv, nrows=5000)` | Scanned **0.46%** of a 1,080,628-row file while advertising itself as verifying the DST duplicates from `test_dst_duplicates.py` — which live at the autumn transition, **far past row 5000**. |
+| 3 | All features `1.0`, band `0 < pred < 1e6` | Every lag and rolling stat set to 1 MW (physically impossible for PJM load), asserted against a **six-order-of-magnitude** window. **Demonstrated passing on an all-1.0 row.** |
+| 4 | `if: ${{ env.HF_MODEL_REPO != '' }}` | A step's own `env:` block is **not visible to that step's `if:`**, so the 6.3 download hook could never activate even once the model was published. |
+
+**All four fixed** (commit `42237db`), and each proven **in both directions**:
+
+- **Feature order** now compares against `machine_learning/feature_reference.py`, captured from the model's real 26 features (`exact match: True`). Verified it **fails on a swapped pair** — where the old form passed.
+- **CSV uniqueness** now scans the whole file in 250k chunks: **1,080,628 rows vs 5,000**, same zero-duplicate conclusion, **216× the evidence**.
+- **Prediction** now builds a realistic 30,000 MW flat history and bounds output to `5,000..100,000` MW with a **50% drift bound** against the input — a behavioural assertion rather than a crash detector.
+- **6.3 hook** now reads `vars`/`secrets` directly.
+
+⚠️ **NOT executed:** the prediction check against the real 1.05 GiB model. This machine has **334 MB available** and two attempts were **OOM-killed at load (exit 124)**. The check's *logic* was exercised against a small stand-in estimator. The full path needs a GitHub runner (~7 GB). **The one claim in this round resting on reasoning rather than execution.**
+
+### 3.10 — Git hygiene warning (open)
+
+Every commit now warns:
+
+```
+warning: There are too many unreachable loose objects; run 'git prune' to remove them.
+warning: The last gc run reported the following. Please correct the root cause
+and remove .git/gc.log
+```
+
+Harmless — an artefact of repeated `git add --renormalize` and edit cycles — but it will keep appearing until cleaned. `git prune` is **destructive** and was deliberately **not** run without asking. Resolve with `rm .git/gc.log && git prune && git gc` when convenient.
+
 
 ---
 
@@ -401,15 +487,15 @@ If you do **only three things** from this entire file:
 | 1 — Correctness | 13 | ✅ 12 / 13 (1.2 withdrawn — not a bug) |
 | 2 — Testing | 10 | ✅ 9 / 10 (2.10 is a pointer to 1.14) |
 | 2b — Extra findings | 2 | ⚠️ 1 / 2 (1.14 fixed, 1.15 open) |
-| 3 — CI/CD | 8 | ⚠️ 5 / 8 done · 2 blocked (3.2 first push, 3.3 needs `gh` auth) |
+| 3 — CI/CD | 8 | ✅ **8 / 8 done — CI green, badge live, branch protected, nightly corrected** |
 | 4 — Docker | 8 | ☐ 0 / 8 |
 | 5 — Architecture | 10 | ☐ 0 / 10 |
 | 6 — Model & ML | 8 | ☐ 0 / 8 |
 | 7 — Deployment | 10 | ☐ 0 / 10 |
 | 8 — Presentation | 8 | ☐ 0 / 8 |
-| **Total** | **76** | **✅ 22 done · ⚠️ 1 partially · ☐ 53 open** |
+| **Total** | **76** | **✅ 25 done · ⚠️ 1 partially · ☐ 50 open** (+4 unlisted fixes in 3.8–3.10) |
 
-**Test suite as of 2026-09-15:** `pytest` → **152 passed, 76% coverage, ~12s.** No model artefact, no CSV, no network required.
+**Test suite as of 2026-09-15:** `pytest` → **152 passed, 72% coverage, ~33s** locally (~16s in CI). No model artefact, no CSV, no network required. The coverage figure moved from 76% to 72% because `machine_learning/__init__.py` was added to fix the mypy job — see 3.2c — and is 0% covered by design.
 
 | File | Tests |
 |---|---|
@@ -425,7 +511,7 @@ If you do **only three things** from this entire file:
 
 ## 🔧 Corrections made to this file (2026-09-15)
 
-This file is a working document and was **wrong in two places**. Both are recorded rather than quietly deleted, because the wrong version was itself instructive:
+This file is a working document and was **wrong in three places**. All are recorded rather than quietly deleted, because the wrong version was itself instructive. The third was found by **verifying Phase 3 after writing it** — see **Phase 3b**:
 
 1. **1.2 was not a bug — withdrawn.** Originally listed as "`is_holiday` hardcoded to `0` — but it IS in the 26 model features", with the implied fix of computing real holidays. The training notebook (`book2_loaded.ipynb` **cell 43**) sets `'is_holiday': 0, # no holidays in this dataset` — a **constant** during training. Inference passing `0` therefore **matches training exactly**, and "fixing" it would have fed the model a feature it never learned from: strictly worse. The `holidays` dependency is a leftover.
    *Root error:* the feature appearing in the list of 26 was treated as proof that it varied. Presence in a feature list says nothing about a feature's training-time distribution — a constant column is still a column. **Always check what training actually produced before "correcting" inference.**
@@ -433,6 +519,10 @@ This file is a working document and was **wrong in two places**. Both are record
 2. **2.6's premise was slightly off.** It asked to "feed a frame with duplicated fall-back timestamps and assert the output row count is exactly right." But there is **no dedup step in the runnable pipeline** to assert against — `grep -c "drop_duplicates\|dst" scripts/clean.py` → **0**, and the fix exists only in notebook `book1` plus the CSVs already on disk. The tests were therefore written against the **mechanism** (merge fan-out) and the **contract** (composite-key uniqueness), not a function that doesn't exist. The row count was only ever a proxy; the real stake — stated in book1's own comment — is that duplicated hours make **lags point at fake neighbours**.
 
 **Scope note:** items 1.1–1.13 and 2.1–2.9 were verified with `py_compile` plus **static reasoning** only; the test suite (2.1–2.9) is what has actually been executed. **No end-to-end runtime test has been performed against the real 342 MiB CSV or the 1.05 GiB model.** The 1.11 buffer rewrite, the 1.9 horizon limit, and the 1.5 startup hard-fail are verified by construction, not by execution. Closing that gap means either running the API once against the real data, or building a tiny fixture model so the full predict path is executable in tests (which would also lift `main.py`/`model_loader.py` past the 76% ceiling).
+
+3. **Phase 3's nightly validation shipped three checks that could not fail — and the workflow ran GREEN anyway.** The original `model-validation.yml` was written, YAML-validated, and triggered successfully. That green run proved the schedule was registered and the skip path worked; it proved **nothing** about the validation, because every substantive step is gated behind artefacts that are gitignored. Reading the logic found `assert list(cols) == list(cols)` (compares a list to itself), a duplicate check that scanned **0.46%** of the file, and a prediction check that **passed on a physically impossible all-1.0 input row**. Full write-up in **3.4b**.
+   *Root error:* **a green check was treated as evidence the check worked.** It was evidence the check *ran*. A skip path and a passing assertion look identical from the outside — the only way to tell them apart is to read the code, or to make the check fail on purpose and watch it fail. **Both were done after the fact**; neither was done before the first green run was believed.
+   *Related:* the `types` job failed with exit code **2** — mypy's "errors prevented further checking" — which is a **tooling abort, not a type error**. No type was ever analysed. See 3.2c.
 
 ---
 
