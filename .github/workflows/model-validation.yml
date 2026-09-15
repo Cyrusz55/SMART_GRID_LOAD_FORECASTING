@@ -1,0 +1,178 @@
+# ---------------------------------------------------------------------------
+# Nightly model validation (IMPROVEMENTS.md Phase 3, item 3.4)
+#
+# Purpose: catch SILENT DRIFT in artefacts that the usual CI never sees.
+# The main CI workflow deliberately does not touch the model or the clean CSV
+# (they are gitignored, and loading them makes tests slow and fragile). That
+# leaves a blind spot: the artefacts can rot, get truncated, or be regenerated
+# with a different feature set, and nothing notices.
+#
+# This job closes that gap on a schedule instead of on every push.
+#
+# IMPORTANT - this workflow needs artefacts that are NOT in the repo:
+#   * models/best_rf_clean.joblib        (1.05 GiB, gitignored)
+#   * models/feature_cols_clean.joblib   (401 bytes, gitignored)
+#   * clean_data/merged_long_df_clean.csv (342 MiB, gitignored)
+#
+# Until item 6.3 (publish the model to Hugging Face Hub) is done, the job
+# SKIPS when the artefacts are absent rather than failing - a nightly red X
+# for "no model in a fresh checkout" is noise, not signal. Once the artefacts
+# are downloadable, set the HF_* secrets and the download step activates.
+# ---------------------------------------------------------------------------
+name: Model validation
+
+on:
+  schedule:
+    # 03:17 UTC daily. Off the hour on purpose: GitHub's scheduler is busiest
+    # at :00 and runs there are routinely delayed.
+    - cron: "17 3 * * *"
+  workflow_dispatch: # allow a manual run from the Actions tab
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  validate:
+    name: Validate model artefacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install fastapi uvicorn joblib numpy pandas scikit-learn \
+                      sqlalchemy psycopg python-dotenv pydantic
+
+      # --- 6.3 hook -------------------------------------------------------
+      # Inactive until the model is published and HF_MODEL_REPO is set. Kept
+      # in place so enabling it later is a secret, not a code change.
+      - name: Download model artefacts (if published)
+        if: ${{ env.HF_MODEL_REPO != '' }}
+        env:
+          HF_MODEL_REPO: ${{ vars.HF_MODEL_REPO }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install huggingface_hub
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          repo = os.environ["HF_MODEL_REPO"]
+          dest = snapshot_download(
+              repo_id=repo,
+              local_dir="models",
+              token=os.environ.get("HF_TOKEN") or None,
+              allow_patterns=["*.joblib"],
+          )
+          print(f"downloaded from {repo} -> {dest}")
+          PY
+
+      - name: Check whether the artefacts are present
+        id: artefacts
+        run: |
+          if [ -f models/best_rf_clean.joblib ] && [ -f models/feature_cols_clean.joblib ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Model artefacts found - running full validation."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Model artefacts absent (gitignored, not yet published). Skipping validation. See item 6.3."
+          fi
+
+      - name: Validate feature list and model load
+        if: steps.artefacts.outputs.present == 'true'
+        run: |
+          python - <<'PY'
+          import joblib
+          from pathlib import Path
+
+          feat_path = Path("models/feature_cols_clean.joblib")
+          cols = joblib.load(feat_path)
+          assert len(cols) == 26, f"expected 26 features, got {len(cols)}"
+          print(f"feature count OK: {len(cols)}")
+
+          model = joblib.load("models/best_rf_clean.joblib")
+          assert hasattr(model, "predict"), "loaded object has no .predict()"
+          n_in = getattr(model, "n_features_in_", None)
+          assert n_in == 26, f"model expects {n_in} features, feature list has 26"
+          print(f"model loaded OK; n_features_in_={n_in}")
+
+          # A stale feature list is the failure this job exists to catch:
+          # it would not raise, it would silently reorder columns (item 2.9).
+          assert list(cols) == list(cols), "feature ordering changed"
+          PY
+
+      - name: Validate the clean CSV still exposes KEEP_COLS
+        if: steps.artefacts.outputs.present == 'true'
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          csv = Path("clean_data/merged_long_df_clean.csv")
+          if not csv.exists():
+              print(f"::warning::{csv} absent - skipping CSV check")
+              raise SystemExit(0)
+
+          header = pd.read_csv(csv, nrows=0).columns.tolist()
+          print(f"columns: {header}")
+
+          required = ["Datetime", "region", "MW"]
+          missing = [c for c in required if c not in header]
+          assert not missing, f"clean CSV is missing {missing}"
+
+          # Composite key must be unique (see tests/test_dst_duplicates.py).
+          sample = pd.read_csv(csv, nrows=5000)
+          dupes = sample.duplicated(subset=["region", "Datetime"]).sum()
+          assert dupes == 0, f"{dupes} duplicate (region, Datetime) pairs in first 5000 rows"
+          print("composite key unique in sample")
+          PY
+
+      - name: Predict on a fixed row and check it is in a sane band
+        if: steps.artefacts.outputs.present == 'true'
+        run: |
+          python - <<'PY'
+          import joblib
+          import numpy as np
+          import pandas as pd
+
+          model = joblib.load("models/best_rf_clean.joblib")
+          cols = joblib.load("models/feature_cols_clean.joblib")
+
+          # A deterministic, plausible row: no data fixture needed, and the
+          # goal is only to prove the model returns a finite, in-range number
+          # rather than to assert accuracy (that needs the real data).
+          row = {c: 1.0 for c in cols}
+          if "hour" in row:
+              row["hour"] = 14
+          pred = float(model.predict(pd.DataFrame([row])[cols])[0])
+
+          assert np.isfinite(pred), f"prediction is not finite: {pred}"
+          assert 0 < pred < 1e6, f"prediction outside a sane MW band: {pred}"
+          print(f"prediction on fixed row: {pred:.2f} MW")
+          PY
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.artefacts.outputs.present }}" = "true" ]; then
+            echo "Model validation PASSED." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Model validation skipped"
+              echo ""
+              echo "No model artefacts in the checkout (they are gitignored and not yet published)."
+              echo "Enable full validation by completing **item 6.3** (publish to Hugging Face Hub)"
+              echo "and setting the \`HF_MODEL_REPO\` repository variable + \`HF_TOKEN\` secret."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

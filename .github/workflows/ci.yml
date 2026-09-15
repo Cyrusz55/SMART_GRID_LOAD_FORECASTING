@@ -1,0 +1,160 @@
+# ---------------------------------------------------------------------------
+# CI (IMPROVEMENTS.md Phase 3, item 3.1)
+#
+# Design rules, in priority order:
+#
+#   1. NEVER load the 1.05 GiB model or the 342 MiB CSV. They are gitignored,
+#      so a CI checkout simply does not have them. Every job below is chosen
+#      to work without them - the test suite stubs the model (item 2.3).
+#   2. The test job must be able to go RED. Lint and types are tolerated
+#      early via continue-on-error (item 3.5); tests are never tolerated.
+#   3. Prefer a plain `pytest` invocation. The coverage floor lives in
+#      pytest.ini (item 2.8) so CI cannot drift from local runs.
+#
+# A note on `python -c "import apps.main"` (3.1d): importing the app builds
+# the FastAPI object and reads env vars, but does NOT run the lifespan hook,
+# so it never touches the model file. Do NOT replace it with a
+# `with TestClient(app)` block - that DOES run lifespan and would hang CI for
+# minutes on the model load (the same trap documented in tests/conftest.py).
+# ---------------------------------------------------------------------------
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref - saves CI minutes on rapid pushes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 3.1a - lint
+  # -------------------------------------------------------------------------
+  lint:
+    name: Lint (ruff + black)
+    runs-on: ubuntu-latest
+    # Tolerated for now: the repo has never been linted, so a first run will
+    # be noisy. Remove continue-on-error once the tree is clean.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install lint tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff==0.14.2 black
+
+      - name: ruff check
+        run: ruff check . --output-format=github
+
+      - name: black --check
+        run: black --check .
+
+  # -------------------------------------------------------------------------
+  # 3.1b - tests + coverage floor  (the ONLY job that must go red)
+  # -------------------------------------------------------------------------
+  test:
+    name: Test (pytest + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Dev deps only. requirements.txt pulls the notebook stack
+          # (tensorflow, prophet, ...) which this suite does not need, and
+          # installing ~160 packages would dominate the run time.
+          pip install -r requirements-dev.txt
+          pip install fastapi uvicorn joblib numpy pandas scikit-learn \
+                      sqlalchemy psycopg python-dotenv pydantic
+
+      - name: Run tests
+        # No --cov flags here on purpose: pytest.ini owns the coverage config
+        # and the --cov-fail-under=70 floor, so local and CI agree.
+        run: pytest -q
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: .coverage
+          if-no-files-found: ignore
+
+  # -------------------------------------------------------------------------
+  # 3.1c - types (tolerated at first, per the checklist)
+  # -------------------------------------------------------------------------
+  types:
+    name: Types (mypy)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install fastapi uvicorn joblib numpy pandas scikit-learn \
+                      sqlalchemy psycopg python-dotenv pydantic
+
+      - name: mypy
+        run: mypy apps/ machine_learning/ --ignore-missing-imports
+
+  # -------------------------------------------------------------------------
+  # 3.1d - import smoke test: catches import-time breakage WITHOUT the model
+  # -------------------------------------------------------------------------
+  import-smoke:
+    name: Import smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install runtime deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn joblib numpy pandas scikit-learn \
+                      sqlalchemy psycopg python-dotenv pydantic
+
+      - name: Import the app (no lifespan, no model load)
+        run: python -c "import apps.main; print('apps.main imported OK')"
+
+      - name: Import the ML module and schemas
+        run: |
+          python -c "import machine_learning.machine_learning as m; print('ml OK')"
+          python -c "import apps.schemas; print('schemas OK')"
