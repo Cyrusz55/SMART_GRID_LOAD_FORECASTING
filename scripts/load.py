@@ -7,12 +7,20 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pandas as pd
 from sqlalchemy import DateTime, Float, Integer, String
+
+import numpy as np
+
 from database.db_connection import get_engine
 from database.models import create_tables
 from scripts.clean import CLEAN_PATH
 
 # Table that the SmartGridLoad model defines (see database/models.py).
 TARGET_TABLE = "smart_grid_load"
+
+# NOTE: this is the ONLY loader for the database. scripts/ingest.py used to
+# push the same CSV into a second table ("smart_grid_load_raw") that nothing
+# read, while database/models.py declares "smart_grid_load". That module has
+# been reduced to a thin alias so there is exactly one canonical table.
 
 CHUNKSIZE = 50_000  # rows per chunk - keeps RAM flat on large cleaned files
 
@@ -73,13 +81,21 @@ def load_clean_data():
 
         # Postgres rejects NaN/inf in numeric columns: turn them into NULL.
         # (The clean file currently has none, but this guards future files.)
-        import numpy as np
+        #
+        # The previous guard was a no-op: s.fillna(np.nan) changes nothing, and
+        # assigning np.nan back into a float column is what was already there -
+        # INFINITY survived and Postgres rejected the row. Coerce to a real
+        # float64 array first so inf becomes detectable, then write None so
+        # SQLAlchemy emits NULL instead of "nan"::float.
         for col in chunk.columns:
             if col == "Datetime":
                 continue
-            s = chunk[col]
-            if pd.api.types.is_numeric_dtype(s):
-                chunk.loc[~np.isfinite(s.fillna(np.nan)), col] = np.nan
+            vals = pd.to_numeric(chunk[col], errors="coerce").to_numpy(
+                dtype="float64", na_value=np.nan
+            )
+            bad = ~np.isfinite(vals)
+            if bad.any():
+                chunk.loc[bad, col] = None
 
         chunk.to_sql(
             TARGET_TABLE,

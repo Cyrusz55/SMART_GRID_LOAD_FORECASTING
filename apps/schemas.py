@@ -83,3 +83,19 @@ class ForecastResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Simple liveness/health check for the app endpoint."""
     status: Literal["ok"] = Field(..., description="Service status.")
+
+
+class ReadinessResponse(BaseModel):
+    """Readiness check: reports whether the model can serve predictions.
+
+    Unlike HealthResponse this is NOT 200-only - a not-ready instance answers
+    HTTP 503 with the same body shape, so callers can read one schema either way.
+    """
+    status: Literal["ready", "not-ready"] = Field(
+        ..., description="'ready' when the model is in memory, else 'not-ready'."
+    )
+    model_loaded: bool = Field(
+        ..., description="True once the model object is cached in memory."
+    )
+    model_path: str = Field(..., description="Path the loader resolved for the model.")
+    detail: str = Field(..., description="Human-readable explanation of the state.")

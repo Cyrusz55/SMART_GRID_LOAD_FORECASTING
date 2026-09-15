@@ -31,6 +31,13 @@ def _clean_chunk(df: pd.DataFrame) -> pd.DataFrame:
     # 1) Keep only the columns we care about.
     df = df[[c for c in KEEP_COLS if c in df.columns]]
 
+    # Bail out early if the target column never made it through step 1: the
+    # dropna below would otherwise raise a KeyError and kill the whole run on
+    # the first chunk. An empty frame is the honest answer - there is nothing
+    # here we can clean or predict from.
+    if target_col not in df.columns:
+        return df
+
     # 2) Drop rows with no target (MW) - cannot predict without it.
     df = df.dropna(subset=[target_col])
 

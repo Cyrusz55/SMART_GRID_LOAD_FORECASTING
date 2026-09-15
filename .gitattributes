@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Line-ending policy (see the CRLF discussion in the Phase 3 work)
+#
+# Why this file exists: three files in this repo had drifted to CRLF on disk
+# while the committed blobs were LF. Git therefore reported them as fully
+# modified - 166 insertions / 166 deletions on requirements.txt - when not a
+# single line of content had changed. That whitespace churn makes real diffs
+# unreviewable, and every future edit to those files would re-trigger it.
+#
+# `text=auto` makes git normalise to LF in the repository while leaving the
+# working tree alone, so Windows checkouts keep working and the history stays
+# clean. The explicit rules below pin the intent for file types where a
+# mistake would actually break something.
+# ---------------------------------------------------------------------------
+
+# Default: let git decide, normalise text files to LF in the repo.
+* text=auto
+
+# --- source -----------------------------------------------------------------
+*.py    text eol=lf
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.ini   text eol=lf
+*.cfg   text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+
+# --- Windows-only helpers keep CRLF so they run in cmd.exe / PowerShell -----
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# --- binary: never touch these, normalisation would corrupt them ------------
+*.joblib  binary
+*.pkl     binary
+*.csv     binary
+*.parquet binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+*.zip     binary
+*.gz      binary

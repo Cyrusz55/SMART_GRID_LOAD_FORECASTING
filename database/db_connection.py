@@ -15,10 +15,13 @@ def get_engine():
     if not database_url:
         raise ValueError("DATABASE_URL environment variable is not set.")
 
+    # Normalise BOTH "postgres://" and "postgresql://" to the psycopg (v3)
+    # driver URL. Order matters: first widen the short scheme, then tag the
+    # driver, so the final URL is always "postgresql+psycopg://...".
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
     if database_url.startswith("postgresql://"):
         database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
-    elif database_url.startswith("postgres://"):
-        database_url = database_url.replace("postgres://", "postgresql+psycopg//", 1)
 
     url = database_url
     connect_args = {}

@@ -10,6 +10,15 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
+# Test / coverage artefacts
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 # IDEs / OS
 .idea/
 .vscode/

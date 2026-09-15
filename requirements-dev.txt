@@ -1,0 +1,19 @@
+# ---------------------------------------------------------------------------
+# Development / test dependencies.
+#
+# These are NOT needed to RUN the service - only to test, lint and type-check
+# it. Install with:
+#
+#     pip install -r requirements.txt -r requirements-dev.txt
+#
+# Kept separate so the production image (see Phase 4) never ships pytest.
+# ---------------------------------------------------------------------------
+
+# --- testing ---------------------------------------------------------------
+pytest==9.1.1
+pytest-cov==7.0.0
+httpx==0.28.1            # required by fastapi.testclient / TestClient
+
+# --- lint / types (Phase 3 CI uses these) ----------------------------------
+ruff==0.14.2
+mypy==1.19.0
