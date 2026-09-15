@@ -10,7 +10,6 @@ The heaviest step - TRAINING - is already done: a model was trained elsewhere
 The full training code is included below but COMMENTED OUT, as a reference for
 how the model was built - in case you ever want to retrain or understand it.
 """
-import os
 from pathlib import Path
 
 import joblib
@@ -139,7 +138,7 @@ def batch_predict(features_df: pd.DataFrame) -> pd.Series:
 if __name__ == "__main__":
     model = load_model()
     feat_cols = load_feature_cols()
-    print(f"Loaded model: RandomForestRegressor")
+    print("Loaded model: RandomForestRegressor")
     print(f"Expected feature count: {len(feat_cols)}")
 
     # Build ONE example row with the right columns, fill lags with real-ish values

@@ -236,38 +236,56 @@ def _recursive_forecast(model, feat_cols, region_name, region_code, start_ts, ho
 def _build_future_row(ts, y, feat_cols):
     """Given the running load series y, build all 26 features for time ts."""
     h, d, m = ts.hour, ts.dayofweek, ts.month
-    row = {}
 
-    # Calendar / cyclical features.
-    for name in feat_cols:
-        if name == "hour":          row[name] = h
-        elif name == "day_of_week": row[name] = d
-        elif name == "month":       row[name] = m
-        elif name == "year":        row[name] = ts.year
-        elif name == "is_weekend":  row[name] = int(d >= 5)
-        elif name == "hour_sin":            row[name] = np.sin(2 * np.pi * h / 24)
-        elif name == "hour_cos":            row[name] = np.cos(2 * np.pi * h / 24)
-        elif name == "day_of_week_sin":     row[name] = np.sin(2 * np.pi * d / 7)
-        elif name == "day_of_week_cos":     row[name] = np.cos(2 * np.pi * d / 7)
-        elif name == "month_sin":           row[name] = np.sin(2 * np.pi * m / 12)
-        elif name == "month_cos":           row[name] = np.cos(2 * np.pi * m / 12)
-        elif name == "is_month_start":      row[name] = int(ts.day == 1)
-        elif name == "is_month_end":        row[name] = int(ts.is_month_end)
-        elif name == "is_holiday":          row[name] = 0
-        elif name == "fourier_sin_1":       row[name] = np.sin(2 * np.pi * (h - 1) / 24)
-        elif name == "fourier_cos_1":       row[name] = np.cos(2 * np.pi * (h - 1) / 24)
-        elif name == "fourier_sin_2":       row[name] = np.sin(2 * np.pi * (h - 1) / 12)
-        elif name == "fourier_cos_2":       row[name] = np.cos(2 * np.pi * (h - 1) / 12)
-        elif name == "load_lag_1h":         row[name] = y[-1] if len(y) >= 1 else np.nan
-        elif name == "load_lag_24h":        row[name] = y[-24] if len(y) >= 24 else np.nan
-        elif name == "load_lag_168h":       row[name] = y[-168] if len(y) >= 168 else np.nan
-        elif name == "load_lag_720h":       row[name] = y[-720] if len(y) >= 720 else np.nan
-        elif name == "load_roll_mean_24h":  row[name] = y[-24:].mean()
-        elif name == "load_roll_std_24h":   row[name] = y[-24:].std()
-        elif name == "load_roll_mean_168h": row[name] = y[-168:].mean()
-        elif name == "load_roll_std_168h":  row[name] = y[-168:].std()
+    # Dispatch table: feature name -> value. A dict beats a 26-branch if/elif
+    # chain here because the model's own feature list drives the lookup, so a
+    # missing branch must be visible. With the old if/elif there was no else,
+    # and a feature the model expects but this table does not cover would
+    # simply never be set - surfacing much later as a pandas KeyError on the
+    # DataFrame construction, far from the actual cause.
+    values = {
+        # --- calendar / cyclical ---
+        "hour": h,
+        "day_of_week": d,
+        "month": m,
+        "year": ts.year,
+        "is_weekend": int(d >= 5),
+        "hour_sin": np.sin(2 * np.pi * h / 24),
+        "hour_cos": np.cos(2 * np.pi * h / 24),
+        "day_of_week_sin": np.sin(2 * np.pi * d / 7),
+        "day_of_week_cos": np.cos(2 * np.pi * d / 7),
+        "month_sin": np.sin(2 * np.pi * m / 12),
+        "month_cos": np.cos(2 * np.pi * m / 12),
+        "is_month_start": int(ts.day == 1),
+        "is_month_end": int(ts.is_month_end),
+        # Constant during training - see book2_loaded.ipynb cell 43. Passing 0
+        # at inference MATCHES training; see item 1.2 in IMPROVEMENTS.md.
+        "is_holiday": 0,
+        "fourier_sin_1": np.sin(2 * np.pi * (h - 1) / 24),
+        "fourier_cos_1": np.cos(2 * np.pi * (h - 1) / 24),
+        "fourier_sin_2": np.sin(2 * np.pi * (h - 1) / 12),
+        "fourier_cos_2": np.cos(2 * np.pi * (h - 1) / 12),
+        # --- lags: NaN when there is not enough history yet ---
+        "load_lag_1h": y[-1] if len(y) >= 1 else np.nan,
+        "load_lag_24h": y[-24] if len(y) >= 24 else np.nan,
+        "load_lag_168h": y[-168] if len(y) >= 168 else np.nan,
+        "load_lag_720h": y[-720] if len(y) >= 720 else np.nan,
+        # --- rolling stats ---
+        "load_roll_mean_24h": y[-24:].mean(),
+        "load_roll_std_24h": y[-24:].std(),
+        "load_roll_mean_168h": y[-168:].mean(),
+        "load_roll_std_168h": y[-168:].std(),
+    }
 
-    return row
+    # Build in the model's own column order, and fail loudly HERE if the model
+    # expects a feature this table does not know about.
+    try:
+        return {name: values[name] for name in feat_cols}
+    except KeyError as exc:
+        raise KeyError(
+            f"feature {exc.args[0]!r} is expected by the model but is not "
+            f"built by _build_future_row(); add it to the dispatch table"
+        ) from exc
 
 
 def _resolve_raw_path():

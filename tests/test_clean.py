@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.clean import KEEP_COLS, _clean_chunk, target_col
+from scripts.clean import KEEP_COLS, _clean_chunk
 
 LAG_COLS = [
     "load_lag_1h", "load_lag_24h", "load_lag_168h", "load_lag_720h",

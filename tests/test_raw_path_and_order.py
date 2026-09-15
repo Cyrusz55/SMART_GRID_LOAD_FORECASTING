@@ -21,7 +21,6 @@ No model artefact and no 342 MiB CSV are required by any test here:
 predict() receives a fake estimator, and the path resolver runs in a tmp dir.
 """
 import importlib
-import sys
 from pathlib import Path
 
 import numpy as np

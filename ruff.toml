@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# ruff configuration - IMPROVEMENTS.md Phase 3 (lint job)
+#
+# Two rules are deliberately NOT enforced here, and both are documented so the
+# next person does not "fix" them by mistake.
+# ---------------------------------------------------------------------------
+
+# Notebooks are analysis artefacts, not shipped code. They account for 116 of
+# the 154 raw findings, almost all unused exploratory imports (xgboost,
+# lightgbm, prophet, tensorflow) that exist to document which models were
+# tried. Linting them would demand deleting the exploration record.
+extend-exclude = ["notebooks", ".venv", "frontend/.web"]
+
+[lint]
+# E402: module level import not at top of file.
+#
+# scripts/load.py and scripts/test_connection.py intentionally import project
+# modules AFTER a `sys.path.insert(0, PROJECT_ROOT)`. Those modules
+# (database.db_connection, scripts.clean) live above the script's own
+# directory, so the path bootstrap must run before the imports. Moving the
+# imports to the top - which is what the rule literally asks for - makes the
+# script fail at import time with ModuleNotFoundError.
+#
+# Scoped per-file rather than globally so genuine E402s elsewhere still fail.
+per-file-ignores = { "scripts/load.py" = ["E402"], "scripts/test_connection.py" = ["E402"] }
+
+[lint.isort]
+known-first-party = ["apps", "database", "machine_learning", "scripts", "tests"]
+
+[format]
+# black-compatible defaults, stated explicitly so ruff-format and black cannot
+# disagree later if both are ever wired up.
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
