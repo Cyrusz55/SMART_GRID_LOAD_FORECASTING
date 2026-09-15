@@ -18,6 +18,15 @@
 # SKIPS when the artefacts are absent rather than failing - a nightly red X
 # for "no model in a fresh checkout" is noise, not signal. Once the artefacts
 # are downloadable, set the HF_* secrets and the download step activates.
+#
+# NOTE ON THE CHECKS THEMSELVES (corrected after a first pass shipped three
+# checks that could not fail - see the individual step comments):
+#   * feature order is compared against machine_learning/feature_reference.py,
+#     a committed reference; the original compared the list TO ITSELF.
+#   * composite-key uniqueness is checked across the WHOLE file, not the first
+#     5000 rows - DST duplicates live in the interior, far past row 5000.
+#   * the prediction row uses a real seasonal profile and a band derived from
+#     the training data range, not all-1.0 features and a 0..1e6 window.
 # ---------------------------------------------------------------------------
 name: Model validation
 
@@ -58,8 +67,13 @@ jobs:
       # --- 6.3 hook -------------------------------------------------------
       # Inactive until the model is published and HF_MODEL_REPO is set. Kept
       # in place so enabling it later is a secret, not a code change.
+      #
+      # `if:` reads vars/secrets directly, NOT `env.HF_MODEL_REPO`. A step's
+      # own `env:` block is not visible to that same step's `if:`, so the
+      # original guard could never be true - the download would silently
+      # never activate even after 6.3 was done.
       - name: Download model artefacts (if published)
-        if: ${{ env.HF_MODEL_REPO != '' }}
+        if: ${{ vars.HF_MODEL_REPO != '' }}
         env:
           HF_MODEL_REPO: ${{ vars.HF_MODEL_REPO }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -95,10 +109,9 @@ jobs:
         run: |
           python - <<'PY'
           import joblib
-          from pathlib import Path
+          from machine_learning.feature_reference import FEATURE_ORDER
 
-          feat_path = Path("models/feature_cols_clean.joblib")
-          cols = joblib.load(feat_path)
+          cols = list(joblib.load("models/feature_cols_clean.joblib"))
           assert len(cols) == 26, f"expected 26 features, got {len(cols)}"
           print(f"feature count OK: {len(cols)}")
 
@@ -108,9 +121,27 @@ jobs:
           assert n_in == 26, f"model expects {n_in} features, feature list has 26"
           print(f"model loaded OK; n_features_in_={n_in}")
 
-          # A stale feature list is the failure this job exists to catch:
-          # it would not raise, it would silently reorder columns (item 2.9).
-          assert list(cols) == list(cols), "feature ordering changed"
+          # THE CHECK THIS JOB EXISTS FOR. A reordered feature list does not
+          # raise anywhere: the model loads, predicts, and returns plausible
+          # numbers while reading hour into day_of_week. Only an explicit
+          # comparison against a known-good ordering catches it.
+          #
+          # The previous version of this step read:
+          #     assert list(cols) == list(cols), "feature ordering changed"
+          # which compares the list to itself and can never fail.
+          if cols != list(FEATURE_ORDER):
+              bad = [
+                  f"  index {i}: model={a!r} reference={b!r}"
+                  for i, (a, b) in enumerate(zip(cols, FEATURE_ORDER))
+                  if a != b
+              ]
+              raise AssertionError(
+                  "feature ORDER differs from machine_learning/feature_reference.py.\n"
+                  + "\n".join(bad)
+                  + "\nIf this retrain was intentional, update feature_reference.py "
+                  "in the same commit."
+              )
+          print("feature ORDER matches the committed reference")
           PY
 
       - name: Validate the clean CSV still exposes KEEP_COLS
@@ -133,13 +164,28 @@ jobs:
           assert not missing, f"clean CSV is missing {missing}"
 
           # Composite key must be unique (see tests/test_dst_duplicates.py).
-          sample = pd.read_csv(csv, nrows=5000)
-          dupes = sample.duplicated(subset=["region", "Datetime"]).sum()
-          assert dupes == 0, f"{dupes} duplicate (region, Datetime) pairs in first 5000 rows"
-          print("composite key unique in sample")
+          #
+          # Checked across the WHOLE file, in chunks, not the first 5000 rows.
+          # The duplicates this guards against come from the DST fall-back
+          # repeat, which sits in the interior of the data - a 5000-row head
+          # never reaches one, so the original check passed trivially while
+          # claiming to verify uniqueness.
+          total = 0
+          dupes = 0
+          for chunk in pd.read_csv(csv, usecols=["region", "Datetime"], chunksize=250_000):
+              total += len(chunk)
+              dupes += int(chunk.duplicated(subset=["region", "Datetime"]).sum())
+
+          # Boundary duplicates spanning a chunk edge are not counted above;
+          # this is a drift alarm, not a bit-exact audit (the test suite owns
+          # that). Zero tolerance is still the assertion.
+          assert dupes == 0, (
+              f"{dupes} duplicate (region, Datetime) pairs across {total} rows"
+          )
+          print(f"composite key unique across all {total} rows checked")
           PY
 
-      - name: Predict on a fixed row and check it is in a sane band
+      - name: Predict on a realistic row and check it is in a sane band
         if: steps.artefacts.outputs.present == 'true'
         run: |
           python - <<'PY'
@@ -148,19 +194,70 @@ jobs:
           import pandas as pd
 
           model = joblib.load("models/best_rf_clean.joblib")
-          cols = joblib.load("models/feature_cols_clean.joblib")
+          cols = list(joblib.load("models/feature_cols_clean.joblib"))
 
-          # A deterministic, plausible row: no data fixture needed, and the
-          # goal is only to prove the model returns a finite, in-range number
-          # rather than to assert accuracy (that needs the real data).
-          row = {c: 1.0 for c in cols}
-          if "hour" in row:
-              row["hour"] = 14
+          # Build a REALISTIC row instead of all-1.0 features. The previous
+          # version set every column (including all lags and rolling stats) to
+          # 1.0 and asserted only 0 < pred < 1e6 - a six-order-of-magnitude
+          # window that any working forest satisfies for any input, so it
+          # detected a crash rather than drift.
+          #
+          # The band comes from the training data's own load range, so a
+          # prediction outside it means the artefact changed meaning.
+          # PJM hourly load runs roughly 10k-60k MW; allow a generous margin.
+          LOAD_FLOOR_MW = 5_000.0
+          LOAD_CEIL_MW = 100_000.0
+          baseline_mw = 30_000.0  # a plausible mid-range regional load
+
+          row = {c: 0.0 for c in cols}
+          row.update(
+              {
+                  "hour": 14,
+                  "day_of_week": 2,  # Wednesday
+                  "month": 7,
+                  "year": 2001,
+                  "is_weekend": 0,
+                  "hour_sin": float(np.sin(2 * np.pi * 14 / 24)),
+                  "hour_cos": float(np.cos(2 * np.pi * 14 / 24)),
+                  "day_of_week_sin": float(np.sin(2 * np.pi * 2 / 7)),
+                  "day_of_week_cos": float(np.cos(2 * np.pi * 2 / 7)),
+                  "month_sin": float(np.sin(2 * np.pi * 7 / 12)),
+                  "month_cos": float(np.cos(2 * np.pi * 7 / 12)),
+                  "fourier_sin_1": float(np.sin(2 * np.pi * (14 - 1) / 24)),
+                  "fourier_cos_1": float(np.cos(2 * np.pi * (14 - 1) / 24)),
+                  "fourier_sin_2": float(np.sin(2 * np.pi * (14 - 1) / 12)),
+                  "fourier_cos_2": float(np.cos(2 * np.pi * (14 - 1) / 12)),
+                  "is_holiday": 0,
+                  "is_month_start": 0,
+                  "is_month_end": 0,
+                  # Lags/rolling stats: a flat mid-range history. Not 1.0,
+                  # which is three orders of magnitude below any real load.
+                  "load_lag_1h": baseline_mw,
+                  "load_lag_24h": baseline_mw,
+                  "load_lag_168h": baseline_mw,
+                  "load_lag_720h": baseline_mw,
+                  "load_roll_mean_24h": baseline_mw,
+                  "load_roll_std_24h": 0.0,
+                  "load_roll_mean_168h": baseline_mw,
+                  "load_roll_std_168h": 0.0,
+              }
+          )
+
           pred = float(model.predict(pd.DataFrame([row])[cols])[0])
-
           assert np.isfinite(pred), f"prediction is not finite: {pred}"
-          assert 0 < pred < 1e6, f"prediction outside a sane MW band: {pred}"
-          print(f"prediction on fixed row: {pred:.2f} MW")
+
+          # The model is a FORECASTER: fed a flat 30k MW history it should
+          # predict near 30k. Being far off is the drift signal.
+          drift = abs(pred - baseline_mw) / baseline_mw
+          assert LOAD_FLOOR_MW < pred < LOAD_CEIL_MW, (
+              f"prediction {pred:.2f} MW outside the plausible PJM band "
+              f"{LOAD_FLOOR_MW}..{LOAD_CEIL_MW} MW"
+            )
+          assert drift < 0.5, (
+              f"prediction {pred:.2f} MW is {drift:.0%} away from the flat "
+              f"{baseline_mw:.0f} MW input history - model may have drifted"
+            )
+          print(f"prediction on realistic row: {pred:.2f} MW (drift {drift:.1%})")
           PY
 
       - name: Summary
