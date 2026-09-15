@@ -1,8 +1,23 @@
 # Large data files
 /data_raw/
-/models/
 *.joblib
 *.csv
+
+# NOTE: the `/models/` DIRECTORY is not excluded here on purpose. A negation
+# cannot re-include a path inside an excluded directory, so excluding
+# `/models/` would make the rule below dead. Exclude the model FILES instead
+# and re-include the one small file that is a contract rather than a model.
+/models/best_rf_clean.joblib
+
+# ---------------------------------------------------------------------------
+# The feature list is a CONTRACT, not a model artefact. It is 401 bytes of
+# plain strings naming the 26 columns the model was trained on, and it is what
+# lets the test suite run without the 1.05 GiB model (item 2.3). Leaving it
+# gitignored meant 66 tests SKIPPED in CI, which dropped coverage under the 70%
+# floor and failed the pipeline - the floor was calibrated against a local run
+# that happened to have the file on disk.
+# ---------------------------------------------------------------------------
+!models/feature_cols_clean.joblib
 
 # Python / virtual env
 .venv/
